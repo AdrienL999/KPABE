@@ -1,10 +1,18 @@
 import it.unisa.dia.gas.jpbc.Element;
+import it.unisa.dia.gas.jpbc.Pairing;
 
 import java.util.*;
 
 public class KPABEPerformanceTest {
 
     public static void main(String[] args) {
+        // 🔥 热启动 pairing，避免第一次 setup 异常慢
+        Pairing warmup = KPABE.getPairing("a.properties");
+        warmup.getG1().newRandomElement();
+        warmup.getGT().newRandomElement();
+        warmup.getZr().newRandomElement();
+        System.out.println("🔁 JPBC pairing 已预热完毕");
+
         runDynamicTest(
                 10,    // 起始属性数
                 10,    // 每轮增加属性数量
@@ -25,6 +33,8 @@ public class KPABEPerformanceTest {
 
             for (int round = 0; round < testRounds; round++) {
                 System.out.printf("---- 测试轮 %d/%d ----\n", round + 1, testRounds);
+                // ✅ 每轮前清空 pairing 缓存，确保 setup 是“冷启动”
+                KPABE.resetPairing();
 
                 String[] messageAttList = pickRandomAttributes(U, (int) (attrCount * messageAttrRatio));
                 Node[] tree = buildRandomAccessTree(messageAttList);

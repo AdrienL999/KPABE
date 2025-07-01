@@ -1,3 +1,7 @@
+import java.util.logging.Logger;
+import java.util.logging.FileHandler;
+import java.util.logging.SimpleFormatter;
+import java.util.logging.Level;
 import it.unisa.dia.gas.jpbc.Element;
 import it.unisa.dia.gas.jpbc.Pairing;
 import it.unisa.dia.gas.plaf.jpbc.pairing.PairingFactory;
@@ -16,12 +20,39 @@ import java.util.stream.IntStream;
 import static java.lang.Integer.valueOf;
 
 public class KPABE {
+    private static final Logger logger = Logger.getLogger(KPABE.class.getName());
+
+    static {
+        try {
+            // 1. 创建 logs 目录（如果不存在）
+            java.nio.file.Path logDir = java.nio.file.Paths.get("logs");
+            if (!java.nio.file.Files.exists(logDir)) {
+                java.nio.file.Files.createDirectories(logDir);
+                System.out.println("✅ 已自动创建日志目录：logs/");
+            }
+
+            // 2. 创建日志文件处理器
+            FileHandler fh = new FileHandler("logs/kpabe.log", true); // true 表示追加写入
+            fh.setFormatter(new SimpleFormatter());
+
+            logger.addHandler(fh);
+            logger.setUseParentHandlers(false); // 不再打印到控制台（如需打印，注释此行）
+
+        } catch (Exception e) {
+            System.err.println("⚠️ 无法初始化日志文件: " + e.getMessage());
+        }
+    }
+
     private static Pairing pairing;
     public static Pairing getPairing(String pairingParamsFileName){
         if(pairing == null){
             pairing = PairingFactory.getPairing(pairingParamsFileName);
         }
         return pairing;
+    }
+
+    public static void resetPairing() {
+        pairing = null;
     }
 
     public static void setup(String pairingParamsFileName, String[] U, String pkFileName, String mskFileName) {
@@ -196,7 +227,8 @@ public class KPABE {
 
             try (OutputStream outputStream = Files.newOutputStream(path)) {
                 prop.store(outputStream, "System Parameters");
-                System.out.println("✅ 文件保存成功：" + path); // 添加成功确认
+                logger.info("✅ 文件保存成功: " + path.toAbsolutePath());//日志就会写入 logs/kpabe.log 文件，不再输出到控制台
+//                System.out.println("✅ 文件保存成功：" + path); // 添加成功确认
             }
         } catch (IOException e) {
             System.err.println("❌ 保存失败：" + fileName);
