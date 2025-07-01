@@ -17,34 +17,30 @@ public class KPABEPerformanceTest {
         );
     }
 
+    // 解决方案一 + 方案二：仅 Setup 一次，不写文件，专注计算
     public static void runDynamicTest(int startAttrCount, int step, int maxAttrCount, int testRounds, double messageAttrRatio) {
         String pairingParamsFileName = "a.properties";
 
-        // ⭐ 热启 pairing ，先做一次加载
+        // pairing 预热 + JVM 热身
         Pairing warmup = KPABE.getPairing(pairingParamsFileName);
         warmup.getG1().newRandomElement();
         warmup.getGT().newRandomElement();
         warmup.getZr().newRandomElement();
-        System.out.println("\u26a1 pairing 已预热启成功\n");
+        System.out.println("✅ pairing 预热完毕\n");
 
-        System.out.println("👟 JVM 热身中...");
+        // JVM 热身一次（不统计）
         try {
-            String[] U = generateAttributeUniverse(10);
-            String[] att = pickRandomAttributes(U, 3);
-            Node[] tree = buildRandomAccessTree(att);
-
-            String pk = "data/dummy_pk.properties";
-            String msk = "data/dummy_msk.properties";
-            String sk = "data/dummy_sk.properties";
-            String ct = "data/dummy_ct.properties";
-
-            KPABE.setup(pairingParamsFileName, U, pk, msk);
-            KPABE.keygen(pairingParamsFileName, tree, pk, msk, sk);
-            Element msg = KPABE.getPairing(pairingParamsFileName).getGT().newRandomElement().getImmutable();
-            KPABE.encrypt(pairingParamsFileName, msg, att, pk, ct);
-            KPABE.decrypt(pairingParamsFileName, tree, pk, ct, sk);
+            System.out.println("👟 JVM 热身中...");
+            String[] dummyU = generateAttributeUniverse(10);
+            String[] dummyAttrs = pickRandomAttributes(dummyU, 3);
+            Node[] dummyTree = buildRandomAccessTree(dummyAttrs);
+            KPABE.setup(pairingParamsFileName, dummyU, "dummy_pk", "dummy_msk");
+            KPABE.keygen(pairingParamsFileName, dummyTree, "dummy_pk", "dummy_msk", "dummy_sk");
+            Element dummyMsg = KPABE.getPairing(pairingParamsFileName).getGT().newRandomElement().getImmutable();
+            KPABE.encrypt(pairingParamsFileName, dummyMsg, dummyAttrs, "dummy_pk", "dummy_ct");
+            KPABE.decrypt(pairingParamsFileName, dummyTree, "dummy_pk", "dummy_ct", "dummy_sk");
         } catch (Exception e) {
-            System.err.println("JVM 热身失败：" + e.getMessage());
+            System.err.println("JVM 热身失败: " + e.getMessage());
         }
 
         try (PrintWriter csvWriter = new PrintWriter(new FileWriter("performance_report.csv"))) {
@@ -54,7 +50,14 @@ public class KPABEPerformanceTest {
                 System.out.printf("===== 属性全集大小: %d =====\n", attrCount);
 
                 String[] U = generateAttributeUniverse(attrCount);
-                long totalSetup = 0, totalKeygen = 0, totalEnc = 0, totalDec = 0;
+
+                // 解决方案二：只执行一次 Setup
+                long t0 = System.currentTimeMillis();
+                KPABE.setup(pairingParamsFileName, U, "data/fixed_pk.properties", "data/fixed_msk.properties");
+                long t1 = System.currentTimeMillis();
+                double setupTime = t1 - t0;
+
+                long totalKeygen = 0, totalEnc = 0, totalDec = 0;
 
                 for (int round = 0; round < testRounds; round++) {
                     System.out.printf("---- 测试轮 %d/%d ----\n", round + 1, testRounds);
@@ -62,48 +65,40 @@ public class KPABEPerformanceTest {
                     String[] messageAttList = pickRandomAttributes(U, (int) (attrCount * messageAttrRatio));
                     Node[] tree = buildRandomAccessTree(messageAttList);
 
-                    String pk = "data/pk_" + attrCount + "_" + round + ".properties";
-                    String msk = "data/msk_" + attrCount + "_" + round + ".properties";
                     String sk = "data/sk_" + attrCount + "_" + round + ".properties";
                     String ct = "data/ct_" + attrCount + "_" + round + ".properties";
 
-                    long t1 = System.currentTimeMillis();
-                    KPABE.setup(pairingParamsFileName, U, pk, msk);
                     long t2 = System.currentTimeMillis();
-                    KPABE.keygen(pairingParamsFileName, tree, pk, msk, sk);
+                    KPABE.keygen(pairingParamsFileName, tree, "data/fixed_pk.properties", "data/fixed_msk.properties", sk);
                     long t3 = System.currentTimeMillis();
 
                     Element message = KPABE.getPairing(pairingParamsFileName).getGT().newRandomElement().getImmutable();
-                    KPABE.encrypt(pairingParamsFileName, message, messageAttList, pk, ct);
+                    KPABE.encrypt(pairingParamsFileName, message, messageAttList, "data/fixed_pk.properties", ct);
                     long t4 = System.currentTimeMillis();
 
                     for (Node node : tree) node.sharesecret = null;
-                    Element decrypted = KPABE.decrypt(pairingParamsFileName, tree, pk, ct, sk);
+                    Element decrypted = KPABE.decrypt(pairingParamsFileName, tree, "data/fixed_pk.properties", ct, sk);
                     long t5 = System.currentTimeMillis();
 
-                    totalSetup += (t2 - t1);
                     totalKeygen += (t3 - t2);
                     totalEnc += (t4 - t3);
                     totalDec += (t5 - t4);
 
-                    boolean success = message.equals(decrypted);
-                    System.out.println("解密" + (success ? "成功 ✅" : "失败 ❌"));
+                    System.out.println("解密" + (message.equals(decrypted) ? "成功 ✅" : "失败 ❌"));
                 }
 
-                double avgSetup = totalSetup / (double) testRounds;
                 double avgKeygen = totalKeygen / (double) testRounds;
                 double avgEnc = totalEnc / (double) testRounds;
                 double avgDec = totalDec / (double) testRounds;
 
                 System.out.printf("== 平均性能：属性全集大小 = %d ==\n", attrCount);
-                System.out.printf("Setup   平均时间: %.2f ms\n", avgSetup);
+                System.out.printf("Setup   时间: %.2f ms\n", setupTime);
                 System.out.printf("KeyGen  平均时间: %.2f ms\n", avgKeygen);
                 System.out.printf("Encrypt 平均时间: %.2f ms\n", avgEnc);
                 System.out.printf("Decrypt 平均时间: %.2f ms\n", avgDec);
                 System.out.println();
 
-                // 写入 CSV
-                csvWriter.printf("%d,%.2f,%.2f,%.2f,%.2f\n", attrCount, avgSetup, avgKeygen, avgEnc, avgDec);
+                csvWriter.printf("%d,%.2f,%.2f,%.2f,%.2f\n", attrCount, setupTime, avgKeygen, avgEnc, avgDec);
             }
 
         } catch (Exception e) {
