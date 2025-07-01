@@ -44,6 +44,7 @@ public class KPABE {
     }
 
     private static Pairing pairing;
+
     public static Pairing getPairing(String pairingParamsFileName){
         if(pairing == null){
             pairing = PairingFactory.getPairing(pairingParamsFileName);
@@ -56,8 +57,9 @@ public class KPABE {
     }
 
     public static void setup(String pairingParamsFileName, String[] U, String pkFileName, String mskFileName) {
-        Pairing bp = getPairing(pairingParamsFileName);
-        Element g = pairing.getG1().newRandomElement().getImmutable();
+        Pairing bp = getPairing(pairingParamsFileName); // ✅ 使用统一的共享 pairing 实例
+
+        Element g = bp.getG1().newRandomElement().getImmutable();
         Properties pkProperties = new Properties();
         Properties mskProperties = new Properties();
 

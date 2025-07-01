@@ -1,112 +1,140 @@
 import it.unisa.dia.gas.jpbc.Element;
 import it.unisa.dia.gas.jpbc.Pairing;
 
+import java.io.FileWriter;
+import java.io.PrintWriter;
 import java.util.*;
 
 public class KPABEPerformanceTest {
 
     public static void main(String[] args) {
-        // 🔥 热启动 pairing，避免第一次 setup 异常慢
-        Pairing warmup = KPABE.getPairing("a.properties");
-        warmup.getG1().newRandomElement();
-        warmup.getGT().newRandomElement();
-        warmup.getZr().newRandomElement();
-        System.out.println("🔁 JPBC pairing 已预热完毕");
-
         runDynamicTest(
                 10,    // 起始属性数
                 10,    // 每轮增加属性数量
                 100,   // 最大属性数
-                5,     // 每组属性测试轮数
-                0.3    // 密文属性占属性全集比例（30%）
+                5,     // 每个属性规模测试轮数
+                0.2    // 密文属性比例（例如：20%）
         );
     }
 
     public static void runDynamicTest(int startAttrCount, int step, int maxAttrCount, int testRounds, double messageAttrRatio) {
         String pairingParamsFileName = "a.properties";
 
-        for (int attrCount = startAttrCount; attrCount <= maxAttrCount; attrCount += step) {
-            System.out.printf("===== 属性全集大小: %d =====\n", attrCount);
+        // ⭐ 热启 pairing ，先做一次加载
+        Pairing warmup = KPABE.getPairing(pairingParamsFileName);
+        warmup.getG1().newRandomElement();
+        warmup.getGT().newRandomElement();
+        warmup.getZr().newRandomElement();
+        System.out.println("\u26a1 pairing 已预热启成功\n");
 
-            String[] U = generateAttributeUniverse(attrCount);
-            long totalSetup = 0, totalKeygen = 0, totalEnc = 0, totalDec = 0;
+        System.out.println("👟 JVM 热身中...");
+        try {
+            String[] U = generateAttributeUniverse(10);
+            String[] att = pickRandomAttributes(U, 3);
+            Node[] tree = buildRandomAccessTree(att);
 
-            for (int round = 0; round < testRounds; round++) {
-                System.out.printf("---- 测试轮 %d/%d ----\n", round + 1, testRounds);
-                // ✅ 每轮前清空 pairing 缓存，确保 setup 是“冷启动”
-                KPABE.resetPairing();
+            String pk = "data/dummy_pk.properties";
+            String msk = "data/dummy_msk.properties";
+            String sk = "data/dummy_sk.properties";
+            String ct = "data/dummy_ct.properties";
 
-                String[] messageAttList = pickRandomAttributes(U, (int) (attrCount * messageAttrRatio));
-                Node[] tree = buildRandomAccessTree(messageAttList);
+            KPABE.setup(pairingParamsFileName, U, pk, msk);
+            KPABE.keygen(pairingParamsFileName, tree, pk, msk, sk);
+            Element msg = KPABE.getPairing(pairingParamsFileName).getGT().newRandomElement().getImmutable();
+            KPABE.encrypt(pairingParamsFileName, msg, att, pk, ct);
+            KPABE.decrypt(pairingParamsFileName, tree, pk, ct, sk);
+        } catch (Exception e) {
+            System.err.println("JVM 热身失败：" + e.getMessage());
+        }
 
-                String pk = "data/pk_" + attrCount + "_" + round + ".properties";
-                String msk = "data/msk_" + attrCount + "_" + round + ".properties";
-                String sk = "data/sk_" + attrCount + "_" + round + ".properties";
-                String ct = "data/ct_" + attrCount + "_" + round + ".properties";
+        try (PrintWriter csvWriter = new PrintWriter(new FileWriter("performance_report.csv"))) {
+            csvWriter.println("属性数,Setup(ms),KeyGen(ms),Encrypt(ms),Decrypt(ms)");
 
-                long t1 = System.currentTimeMillis();
-                KPABE.setup(pairingParamsFileName, U, pk, msk);
-                long t2 = System.currentTimeMillis();
-                KPABE.keygen(pairingParamsFileName, tree, pk, msk, sk);
-                long t3 = System.currentTimeMillis();
+            for (int attrCount = startAttrCount; attrCount <= maxAttrCount; attrCount += step) {
+                System.out.printf("===== 属性全集大小: %d =====\n", attrCount);
 
-                Element message = KPABE.getPairing(pairingParamsFileName).getGT().newRandomElement().getImmutable();
+                String[] U = generateAttributeUniverse(attrCount);
+                long totalSetup = 0, totalKeygen = 0, totalEnc = 0, totalDec = 0;
 
-                KPABE.encrypt(pairingParamsFileName, message, messageAttList, pk, ct);
-                long t4 = System.currentTimeMillis();
+                for (int round = 0; round < testRounds; round++) {
+                    System.out.printf("---- 测试轮 %d/%d ----\n", round + 1, testRounds);
 
-                for (Node node : tree) node.sharesecret = null;
+                    String[] messageAttList = pickRandomAttributes(U, (int) (attrCount * messageAttrRatio));
+                    Node[] tree = buildRandomAccessTree(messageAttList);
 
-                Element decrypted = KPABE.decrypt(pairingParamsFileName, tree, pk, ct, sk);
-                long t5 = System.currentTimeMillis();
+                    String pk = "data/pk_" + attrCount + "_" + round + ".properties";
+                    String msk = "data/msk_" + attrCount + "_" + round + ".properties";
+                    String sk = "data/sk_" + attrCount + "_" + round + ".properties";
+                    String ct = "data/ct_" + attrCount + "_" + round + ".properties";
 
-                totalSetup += (t2 - t1);
-                totalKeygen += (t3 - t2);
-                totalEnc += (t4 - t3);
-                totalDec += (t5 - t4);
+                    long t1 = System.currentTimeMillis();
+                    KPABE.setup(pairingParamsFileName, U, pk, msk);
+                    long t2 = System.currentTimeMillis();
+                    KPABE.keygen(pairingParamsFileName, tree, pk, msk, sk);
+                    long t3 = System.currentTimeMillis();
 
-                boolean success = message.equals(decrypted);
-                System.out.println("解密" + (success ? "成功 ✅" : "失败 ❌"));
+                    Element message = KPABE.getPairing(pairingParamsFileName).getGT().newRandomElement().getImmutable();
+                    KPABE.encrypt(pairingParamsFileName, message, messageAttList, pk, ct);
+                    long t4 = System.currentTimeMillis();
+
+                    for (Node node : tree) node.sharesecret = null;
+                    Element decrypted = KPABE.decrypt(pairingParamsFileName, tree, pk, ct, sk);
+                    long t5 = System.currentTimeMillis();
+
+                    totalSetup += (t2 - t1);
+                    totalKeygen += (t3 - t2);
+                    totalEnc += (t4 - t3);
+                    totalDec += (t5 - t4);
+
+                    boolean success = message.equals(decrypted);
+                    System.out.println("解密" + (success ? "成功 ✅" : "失败 ❌"));
+                }
+
+                double avgSetup = totalSetup / (double) testRounds;
+                double avgKeygen = totalKeygen / (double) testRounds;
+                double avgEnc = totalEnc / (double) testRounds;
+                double avgDec = totalDec / (double) testRounds;
+
+                System.out.printf("== 平均性能：属性全集大小 = %d ==\n", attrCount);
+                System.out.printf("Setup   平均时间: %.2f ms\n", avgSetup);
+                System.out.printf("KeyGen  平均时间: %.2f ms\n", avgKeygen);
+                System.out.printf("Encrypt 平均时间: %.2f ms\n", avgEnc);
+                System.out.printf("Decrypt 平均时间: %.2f ms\n", avgDec);
+                System.out.println();
+
+                // 写入 CSV
+                csvWriter.printf("%d,%.2f,%.2f,%.2f,%.2f\n", attrCount, avgSetup, avgKeygen, avgEnc, avgDec);
             }
 
-            System.out.printf("== 平均性能：属性全集大小 = %d ==\n", attrCount);
-            System.out.printf("Setup   平均时间: %.2f ms\n", totalSetup / (double) testRounds);
-            System.out.printf("KeyGen  平均时间: %.2f ms\n", totalKeygen / (double) testRounds);
-            System.out.printf("Encrypt 平均时间: %.2f ms\n", totalEnc / (double) testRounds);
-            System.out.printf("Decrypt 平均时间: %.2f ms\n", totalDec / (double) testRounds);
-            System.out.println();
+        } catch (Exception e) {
+            System.err.println("❌ 写入 CSV 文件失败：" + e.getMessage());
         }
     }
 
-    // 动态构造属性全集
     public static String[] generateAttributeUniverse(int count) {
         String[] U = new String[count];
         for (int i = 0; i < count; i++) {
             char letter = (char) ('A' + i / 10);
-            int number = i % 10 + 1;
+            int number = (i % 10) + 1;
             U[i] = String.format("%c%d", letter, number);
         }
         return U;
     }
 
-    // 从全集中随机抽取密文属性
     public static String[] pickRandomAttributes(String[] U, int count) {
         List<String> list = new ArrayList<>(Arrays.asList(U));
         Collections.shuffle(list);
         return list.subList(0, Math.min(count, list.size())).toArray(new String[0]);
     }
 
-    // 自动构造一个简单的 2 层访问树
     public static Node[] buildRandomAccessTree(String[] messageAttList) {
-        int leafCount = Math.min(5, messageAttList.length); // 控制叶子节点数量
-
+        int leafCount = Math.min(5, messageAttList.length);
         Node[] tree = new Node[1 + leafCount];
         int[] childIndices = new int[leafCount];
         for (int i = 0; i < leafCount; i++) {
-            tree[i + 1] = new Node(messageAttList[i]); // 叶子节点
+            tree[i + 1] = new Node(messageAttList[i]);
             childIndices[i] = i + 1;
         }
-        // 根节点为 k of n 门限结构
         int threshold = Math.max(2, leafCount / 2);
         tree[0] = new Node(new int[]{threshold, leafCount}, childIndices);
         return tree;
